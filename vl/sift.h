@@ -137,6 +137,9 @@ void  vl_sift_keypoint_init              (VlSiftFilt const *f,
                                           double x,
                                           double y,
                                           double sigma) ;
+
+VL_EXPORT 
+void update_gradient(VlSiftFilt *f);
 /** @} */
 
 /** @name Retrieve data and parameters

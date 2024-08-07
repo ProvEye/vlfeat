@@ -885,7 +885,6 @@ vl_sift_new (int width, int height,
   if (noctaves < 0) {
     noctaves = VL_MAX (floor (log2 (VL_MIN(width, height))) - o_min - 3, 1) ;
   }
-
   f-> width   = width ;
   f-> height  = height ;
   f-> O       = noctaves ;
@@ -1443,7 +1442,7 @@ vl_sift_detect (VlSiftFilt * f)
  ** @remark The minimum octave size is 2x2xS.
  **/
 
-static void
+void
 update_gradient (VlSiftFilt *f)
 {
   int       s_min = f->s_min ;

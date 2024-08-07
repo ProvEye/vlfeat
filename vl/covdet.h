@@ -137,6 +137,7 @@ vl_get_frame_type (vl_bool affineAdaptation, vl_bool orientation)
 typedef struct _VlCovDetFeature
 {
   VlFrameOrientedEllipse frame ; /**< feature frame. */
+  float sigma;      /**< sigma */
   float peakScore ; /**< peak score. */
   float edgeScore ; /**< edge score. */
   float orientationScore ; /**< orientation score. */
@@ -182,11 +183,24 @@ struct _VlCovDet { }
  ** @see @ref covdet */
 typedef struct _VlCovDet VlCovDet ;
 
+typedef struct _VlCovDetBuffer
+{
+    float* patch;
+    vl_size patchBufferSize;
+} VlCovDetBuffer;
+
 /** @name Create and destroy
  ** @{ */
 VL_EXPORT VlCovDet * vl_covdet_new (VlCovDetMethod method) ;
 VL_EXPORT void vl_covdet_delete (VlCovDet * self) ;
-VL_EXPORT void vl_covdet_reset (VlCovDet * self) ;
+VL_EXPORT void vl_covdet_reset(VlCovDet* self);
+VL_EXPORT VlCovDetBuffer* vl_covdetbuffer_new();
+VL_EXPORT void vl_covdetbuffer_init(VlCovDetBuffer* self);
+VL_EXPORT void vl_covdetbuffer_clear(VlCovDetBuffer* self);
+VL_EXPORT void vl_covdetbuffer_delete(VlCovDetBuffer* self);
+
+VL_EXPORT int _vl_resize_buffer2 (void ** buffer, vl_size * bufferSize, vl_size targetSize);
+
 /** @} */
 
 /** @name Process data
@@ -195,29 +209,33 @@ VL_EXPORT int vl_covdet_put_image (VlCovDet * self,
                                     float const * image,
                                     vl_size width, vl_size height) ;
 
-VL_EXPORT void vl_covdet_detect (VlCovDet * self) ;
+VL_EXPORT void vl_covdet_detect (VlCovDet * self, vl_size max_num_features);
 VL_EXPORT int vl_covdet_append_feature (VlCovDet * self, VlCovDetFeature const * feature) ;
-VL_EXPORT void vl_covdet_extract_orientations (VlCovDet * self) ;
-VL_EXPORT void vl_covdet_extract_laplacian_scales (VlCovDet * self) ;
-VL_EXPORT void vl_covdet_extract_affine_shape (VlCovDet * self) ;
+VL_EXPORT void vl_covdet_extract_orientations (VlCovDet * self, VlCovDetBuffer* internalBuffer) ;
+VL_EXPORT void vl_covdet_extract_laplacian_scales (VlCovDet * self, VlCovDetBuffer* internalBuffer) ;
+VL_EXPORT void vl_covdet_extract_affine_shape (VlCovDet * self, VlCovDetBuffer* internalBuffer) ;
 
 VL_EXPORT VlCovDetFeatureOrientation *
 vl_covdet_extract_orientations_for_frame (VlCovDet * self,
+                                          VlCovDetBuffer* internalBuffer,
                                           vl_size *numOrientations,
                                           VlFrameOrientedEllipse frame) ;
 
 VL_EXPORT VlCovDetFeatureLaplacianScale *
 vl_covdet_extract_laplacian_scales_for_frame (VlCovDet * self,
+                                              VlCovDetBuffer* internalBuffer,
                                               vl_size * numScales,
                                               VlFrameOrientedEllipse frame) ;
 VL_EXPORT int
 vl_covdet_extract_affine_shape_for_frame (VlCovDet * self,
+                                          VlCovDetBuffer* internalBuffer,
                                           VlFrameOrientedEllipse * adapted,
                                           VlFrameOrientedEllipse frame) ;
 
 VL_EXPORT vl_bool
 vl_covdet_extract_patch_for_frame (VlCovDet * self, float * patch,
                                    vl_size resolution,
+                                   VlCovDetBuffer* internalBuffer,
                                    double extent,
                                    double sigma,
                                    VlFrameOrientedEllipse frame) ;
@@ -229,7 +247,7 @@ vl_covdet_drop_features_outside (VlCovDet * self, double margin) ;
 /** @name Retrieve data and parameters
  ** @{ */
 VL_EXPORT vl_size vl_covdet_get_num_features (VlCovDet const * self) ;
-VL_EXPORT void * vl_covdet_get_features (VlCovDet * self) ;
+VL_EXPORT VlCovDetFeature* vl_covdet_get_features(VlCovDet* self);
 VL_EXPORT vl_index vl_covdet_get_first_octave (VlCovDet const * self) ;
 VL_EXPORT vl_size vl_covdet_get_num_octaves (VlCovDet const * self) ;
 VL_EXPORT double vl_covdet_get_base_scale (VlCovDet const * self) ;

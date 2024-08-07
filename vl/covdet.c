@@ -952,6 +952,29 @@ $\ell_{(\kappa\sigma)^2}$ and $\ell_{\sigma^2}$.
  ** @return error code
  **/
 
+int
+_vl_resize_buffer2(void ** buffer, vl_size * bufferSize, vl_size targetSize) {
+  void * newBuffer ;
+  if (*buffer == NULL) {
+    *buffer = vl_malloc(targetSize) ;
+    if (*buffer) {
+      *bufferSize = targetSize ;
+      return VL_ERR_OK ;
+    } else {
+      *bufferSize = 0 ;
+      return VL_ERR_ALLOC ;
+    }
+  }
+  newBuffer = vl_realloc(*buffer, targetSize) ;
+  if (newBuffer) {
+    *buffer = newBuffer ;
+    *bufferSize = targetSize ;
+    return VL_ERR_OK ;
+  } else {
+    return VL_ERR_ALLOC ;
+  }
+}
+
 static int
 _vl_resize_buffer (void ** buffer, vl_size * bufferSize, vl_size targetSize) {
   void * newBuffer ;
@@ -1474,8 +1497,8 @@ struct _VlCovDet
   vl_size numFeatures ;
   vl_size numFeatureBufferSize ;
 
-  float * patch ;
-  vl_size patchBufferSize ;
+  //float * patch ; // AliceVision: moved as external variable to allow multithreading
+  //vl_size patchBufferSize ;
 
   vl_bool transposed ;
   VlCovDetFeatureOrientation orientations [VL_COVDET_MAX_NUM_ORIENTATIONS] ;
@@ -1546,8 +1569,8 @@ vl_covdet_new (VlCovDetMethod method)
   self->features = NULL ;
   self->numFeatures = 0 ;
   self->numFeatureBufferSize = 0 ;
-  self->patch = NULL ;
-  self->patchBufferSize = 0 ;
+  //self->patch = NULL ;
+  //self->patchBufferSize = 0 ;
   self->transposed = VL_FALSE ;
   self->aaAccurateSmoothing = VL_COVDET_AA_ACCURATE_SMOOTHING ;
   self->allowPaddedWarping = VL_TRUE ;
@@ -1641,8 +1664,38 @@ void
 vl_covdet_delete (VlCovDet * self)
 {
   vl_covdet_reset(self) ;
-  if (self->patch) vl_free (self->patch) ;
+  // if (self->patch) vl_free (self->patch) ;
   vl_free(self) ;
+}
+
+
+VlCovDetBuffer* vl_covdetbuffer_new()
+{
+    VlCovDetBuffer* self = vl_calloc(sizeof(VlCovDetBuffer), 1);
+    vl_covdetbuffer_init(self);
+    return self;
+};
+
+void vl_covdetbuffer_init(VlCovDetBuffer* self)
+{
+    self->patch = NULL;
+    self->patchBufferSize = 0;
+}
+
+void vl_covdetbuffer_clear(VlCovDetBuffer* self)
+{
+    if(self->patch)
+    {
+        vl_free(self->patch);
+        self->patch = NULL;
+    }
+    self->patchBufferSize = 0;
+}
+
+void vl_covdetbuffer_delete(VlCovDetBuffer* self)
+{
+    vl_covdetbuffer_clear(self);
+    vl_free(self);
 }
 
 /** @brief Append a feature to the internal buffer.
@@ -1932,7 +1985,7 @@ _vl_dog_response (float * dog,
  **/
 
 void
-vl_covdet_detect (VlCovDet * self)
+vl_covdet_detect (VlCovDet * self, vl_size max_num_features)
 {
   VlScaleSpaceGeometry geom = vl_scalespace_get_geometry(self->gss) ;
   VlScaleSpaceGeometry cgeom ;
@@ -2046,7 +2099,8 @@ vl_covdet_detect (VlCovDet * self)
               feature.frame.a11 = sigma ;
               feature.frame.a12 = 0.0 ;
               feature.frame.a21 = 0.0 ;
-              feature.frame.a22 = sigma ;
+              feature.frame.a22 = sigma;
+              feature.sigma = sigma;
               feature.peakScore = refined.peakScore ;
               feature.edgeScore = refined.edgeScore ;
               vl_covdet_append_feature(self, &feature) ;
@@ -2083,7 +2137,8 @@ vl_covdet_detect (VlCovDet * self)
                 feature.frame.a11 = sigma ;
                 feature.frame.a12 = 0.0 ;
                 feature.frame.a21 = 0.0 ;
-                feature.frame.a22 = sigma ;
+                feature.frame.a22 = sigma;
+                feature.sigma = sigma;
                 feature.peakScore = refined.peakScore ;
                 feature.edgeScore = refined.edgeScore ;
                 vl_covdet_append_feature(self, &feature) ;
@@ -2092,6 +2147,9 @@ vl_covdet_detect (VlCovDet * self)
           }
           break ;
         }
+      }
+      if (self->numFeatures >= max_num_features) {
+        break;
       }
     } /* next octave */
 
@@ -2102,8 +2160,13 @@ vl_covdet_detect (VlCovDet * self)
   switch (self->method) {
     case VL_COVDET_METHOD_HARRIS_LAPLACE :
     case VL_COVDET_METHOD_HESSIAN_LAPLACE :
-      vl_covdet_extract_laplacian_scales (self) ;
+    {
+      VlCovDetBuffer internalBuffer;
+      vl_covdetbuffer_init(&internalBuffer);
+      vl_covdet_extract_laplacian_scales(self, &internalBuffer);
+      vl_covdetbuffer_clear(&internalBuffer);
       break ;
+    }
     default:
       break ;
   }
@@ -2174,6 +2237,7 @@ vl_covdet_extract_patch_helper (VlCovDet * self,
                                 double * sigma2,
                                 float * patch,
                                 vl_size resolution,
+                                VlCovDetBuffer* internalBuffer,
                                 double extent,
                                 double sigma,
                                 double A_ [4],
@@ -2326,15 +2390,15 @@ vl_covdet_extract_patch_helper (VlCovDet * self,
       vl_index patchWidth = x1i - x0i + 1 ;
       vl_index patchHeight = y1i - y0i + 1 ;
       vl_size patchBufferSize = patchWidth * patchHeight * sizeof(float) ;
-      if (patchBufferSize > self->patchBufferSize) {
-        int err = _vl_resize_buffer((void**)&self->patch, &self->patchBufferSize, patchBufferSize) ;
+      if (patchBufferSize > internalBuffer->patchBufferSize) {
+        int err = _vl_resize_buffer((void**)&internalBuffer->patch, &internalBuffer->patchBufferSize, patchBufferSize) ;
         if (err) return vl_set_last_error(VL_ERR_ALLOC, "Unable to allocate data.") ;
       }
 
       if (pady0 < patchHeight - pady1) {
         /* start by filling the central horizontal band */
         for (yi = y0i + pady0 ; yi < y0i + patchHeight - pady1 ; ++ yi) {
-          float *dst = self->patch + (yi - y0i) * patchWidth ;
+          float *dst = internalBuffer->patch + (yi - y0i) * patchWidth ;
           float const *src = level + yi * width + VL_MIN(VL_MAX(0, x0i),(signed)width-1) ;
           for (xi = x0i ; xi < x0i + padx0 ; ++xi) *dst++ = *src ;
           for ( ; xi < x0i + patchWidth - padx1 - 2 ; ++xi) *dst++ = *src++ ;
@@ -2342,18 +2406,18 @@ vl_covdet_extract_patch_helper (VlCovDet * self,
         }
         /* now extend the central band up and down */
         for (yi = 0 ; yi < pady0 ; ++yi) {
-          memcpy(self->patch + yi * patchWidth,
-                 self->patch + pady0 * patchWidth,
+          memcpy(internalBuffer->patch + yi * patchWidth,
+                 internalBuffer->patch + pady0 * patchWidth,
                  patchWidth * sizeof(float)) ;
         }
         for (yi = patchHeight - pady1 ; yi < patchHeight ; ++yi) {
-          memcpy(self->patch + yi * patchWidth,
-                 self->patch + (patchHeight - pady1 - 1) * patchWidth,
+          memcpy(internalBuffer->patch + yi * patchWidth,
+                 internalBuffer->patch + (patchHeight - pady1 - 1) * patchWidth,
                  patchWidth * sizeof(float)) ;
         }
       } else {
         /* should be handled better! */
-        memset(self->patch, 0, self->patchBufferSize) ;
+        memset(internalBuffer->patch, 0, internalBuffer->patchBufferSize) ;
       }
 #if 0
       {
@@ -2363,7 +2427,7 @@ vl_covdet_extract_patch_helper (VlCovDet * self,
       }
 #endif
 
-      level = self->patch ;
+      level = internalBuffer->patch ;
       width = patchWidth ;
       height = patchHeight ;
       T[0] -= x0i ;
@@ -2443,6 +2507,7 @@ vl_bool
 vl_covdet_extract_patch_for_frame (VlCovDet * self,
                                    float * patch,
                                    vl_size resolution,
+                                   VlCovDetBuffer* internalBuffer,
                                    double extent,
                                    double sigma,
                                    VlFrameOrientedEllipse frame)
@@ -2454,7 +2519,7 @@ vl_covdet_extract_patch_for_frame (VlCovDet * self,
   vl_svd2(D, U, V, A) ;
 
   return vl_covdet_extract_patch_helper
-  (self, NULL, NULL, patch, resolution, extent, sigma, A, T, D[0], D[3]) ;
+  (self, NULL, NULL, patch, resolution, internalBuffer, extent, sigma, A, T, D[0], D[3]) ;
 }
 
 /* ---------------------------------------------------------------- */
@@ -2473,6 +2538,7 @@ vl_covdet_extract_patch_for_frame (VlCovDet * self,
 
 int
 vl_covdet_extract_affine_shape_for_frame (VlCovDet * self,
+                                          VlCovDetBuffer* internalBuffer,
                                           VlFrameOrientedEllipse * adapted,
                                           VlFrameOrientedEllipse frame)
 {
@@ -2543,6 +2609,7 @@ vl_covdet_extract_affine_shape_for_frame (VlCovDet * self,
                                          &sigma1, &sigma2,
                                          self->aaPatch,
                                          resolution,
+                                         internalBuffer,
                                          extent,
                                          sigmaD,
                                          A, T, D[0], D[3]) ;
@@ -2661,7 +2728,7 @@ vl_covdet_extract_affine_shape_for_frame (VlCovDet * self,
  **/
 
 void
-vl_covdet_extract_affine_shape (VlCovDet * self)
+vl_covdet_extract_affine_shape (VlCovDet * self, VlCovDetBuffer* internalBuffer)
 {
   vl_index i, j = 0 ;
   vl_size numFeatures = vl_covdet_get_num_features(self) ;
@@ -2669,7 +2736,7 @@ vl_covdet_extract_affine_shape (VlCovDet * self)
   for (i = 0 ; i < (signed)numFeatures ; ++i) {
     int status ;
     VlFrameOrientedEllipse adapted ;
-    status = vl_covdet_extract_affine_shape_for_frame(self, &adapted, feature[i].frame) ;
+    status = vl_covdet_extract_affine_shape_for_frame(self, internalBuffer, &adapted, feature[i].frame) ;
     if (status == VL_ERR_OK) {
       feature[j] = feature[i] ;
       feature[j].frame = adapted ;
@@ -2708,6 +2775,7 @@ _vl_covdet_compare_orientations_descending (void const * a_,
 
 VlCovDetFeatureOrientation *
 vl_covdet_extract_orientations_for_frame (VlCovDet * self,
+                                          VlCovDetBuffer* internalBuffer,
                                           vl_size * numOrientations,
                                           VlFrameOrientedEllipse frame)
 {
@@ -2767,6 +2835,7 @@ vl_covdet_extract_orientations_for_frame (VlCovDet * self,
                                        &sigma1, &sigma2,
                                        self->aaPatch,
                                        resolution,
+                                       internalBuffer,
                                        extent,
                                        sigmaD,
                                        A, T, D[0], D[3]) ;
@@ -2867,7 +2936,7 @@ vl_covdet_extract_orientations_for_frame (VlCovDet * self,
  **/
 
 void
-vl_covdet_extract_orientations (VlCovDet * self)
+vl_covdet_extract_orientations (VlCovDet * self, VlCovDetBuffer* internalBuffer)
 {
   vl_index i, j  ;
   vl_size numFeatures = vl_covdet_get_num_features(self) ;
@@ -2875,7 +2944,7 @@ vl_covdet_extract_orientations (VlCovDet * self)
     vl_size numOrientations ;
     VlCovDetFeature feature = self->features[i] ;
     VlCovDetFeatureOrientation* orientations =
-    vl_covdet_extract_orientations_for_frame(self, &numOrientations, feature.frame) ;
+    vl_covdet_extract_orientations_for_frame(self, internalBuffer, &numOrientations, feature.frame) ;
 
     for (j = 0 ; j < (signed)numOrientations ; ++j) {
       double A [2*2] = {
@@ -2918,6 +2987,7 @@ vl_covdet_extract_orientations (VlCovDet * self)
 
 VlCovDetFeatureLaplacianScale *
 vl_covdet_extract_laplacian_scales_for_frame (VlCovDet * self,
+                                              VlCovDetBuffer * internalBuffer,
                                               vl_size * numScales,
                                               VlFrameOrientedEllipse frame)
 {
@@ -2959,7 +3029,7 @@ vl_covdet_extract_laplacian_scales_for_frame (VlCovDet * self,
   vl_svd2(D, U, V, A) ;
 
   err = vl_covdet_extract_patch_helper
-  (self, &sigma1, &sigma2, self->lapPatch, resolution, extent, sigmaImage, A, T, D[0], D[3]) ;
+  (self, &sigma1, &sigma2, self->lapPatch, resolution, internalBuffer, extent, sigmaImage, A, T, D[0], D[3]) ;
   if (err) return NULL ;
 
   /* the actual smoothing after warping is never the target one */
@@ -3026,7 +3096,7 @@ vl_covdet_extract_laplacian_scales_for_frame (VlCovDet * self,
  ** one for each orientation.
  **/
 void
-vl_covdet_extract_laplacian_scales (VlCovDet * self)
+vl_covdet_extract_laplacian_scales (VlCovDet * self, VlCovDetBuffer* internalBuffer)
 {
   vl_index i, j  ;
   vl_bool dropFeaturesWithoutScale = VL_TRUE ;
@@ -3038,7 +3108,7 @@ vl_covdet_extract_laplacian_scales (VlCovDet * self)
     vl_size numScales ;
     VlCovDetFeature feature = self->features[i] ;
     VlCovDetFeatureLaplacianScale const * scales =
-    vl_covdet_extract_laplacian_scales_for_frame(self, &numScales, feature.frame) ;
+    vl_covdet_extract_laplacian_scales_for_frame(self, internalBuffer, &numScales, feature.frame) ;
 
     self->numFeaturesWithNumScales[numScales] ++ ;
 
@@ -3435,7 +3505,7 @@ vl_covdet_get_num_features (VlCovDet const * self)
 /** @brief Get the stored frames
  ** @return frames stored in the detector.
  **/
-void *
+VlCovDetFeature*
 vl_covdet_get_features (VlCovDet * self)
 {
   return self->features ;
